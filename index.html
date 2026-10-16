@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Estanque Koi - Juego para Gatos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #081a24;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .custom-glass {
+            background: rgba(12, 34, 48, 0.82);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        @keyframes score-pop {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        .animate-score {
+            animation: score-pop 0.25s ease-out;
+        }
+    </style>
+</head>
+<body class="relative overflow-hidden text-slate-100">
+
+    <!-- GAME CANVAS -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- UI OVERLAY: TOP BAR -->
+    <div class="absolute top-0 left-0 right-0 p-4 flex justify-between items-center pointer-events-none z-10">
+        <!-- Score & Captured Fish -->
+        <div class="custom-glass px-4 py-2.5 rounded-2xl flex items-center gap-3 shadow-2xl pointer-events-auto border-emerald-500/20">
+            <div class="w-10 h-10 rounded-xl bg-teal-500/20 flex items-center justify-center text-teal-300 text-xl border border-teal-500/30">
+                <i class="fa-solid fa-fish"></i>
+            </div>
+            <div>
+                <p class="text-[10px] uppercase tracking-wider text-teal-200/70 font-bold">Peces Atrapados</p>
+                <p id="scoreDisplay" class="text-2xl font-black text-teal-300 leading-none">0</p>
+            </div>
+        </div>
+
+        <!-- Controls Header -->
+        <div class="flex items-center gap-2 pointer-events-auto">
+            <!-- Fish Count Toggle -->
+            <button id="fishCountBtn" class="custom-glass px-3.5 py-2.5 rounded-2xl flex items-center gap-2 text-amber-300 hover:bg-slate-800/60 transition-all active:scale-95 shadow-lg font-bold text-xs border border-amber-500/30">
+                <i class="fa-solid fa-water"></i>
+                <span id="fishCountText">4 Peces</span>
+            </button>
+
+            <!-- Water Color Mode -->
+            <button id="pondThemeBtn" class="custom-glass w-11 h-11 rounded-2xl flex items-center justify-center text-cyan-300 hover:bg-slate-800/60 transition-all active:scale-95 shadow-lg" title="Cambiar Agua">
+                <i class="fa-solid fa-palette text-lg"></i>
+            </button>
+
+            <!-- Pet Safe Lock -->
+            <button id="lockBtn" class="custom-glass px-4 py-2.5 rounded-2xl flex items-center gap-2 text-rose-300 hover:bg-slate-800/60 transition-all active:scale-95 shadow-lg font-semibold text-sm border border-rose-500/30">
+                <i class="fa-solid fa-lock"></i>
+                <span class="hidden sm:inline">Bloqueo Gato</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- PET LOCK OVERLAY -->
+    <div id="lockOverlay" class="hidden absolute inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center pointer-events-auto">
+        <div class="text-center p-6 max-w-xs">
+            <div class="w-20 h-20 rounded-full bg-teal-500/20 text-teal-300 flex items-center justify-center text-3xl mx-auto mb-4 border border-teal-500/30 animate-pulse">
+                <i class="fa-solid fa-shield-cat"></i>
+            </div>
+            <h2 class="text-xl font-bold text-white mb-2">Modo Estanque Seguro</h2>
+            <p class="text-xs text-slate-400 mb-6">Mantén presionado el botón por 2 segundos para liberar los controles.</p>
+            
+            <button id="unlockBtn" class="relative overflow-hidden w-full py-3.5 bg-slate-800 border border-slate-700 text-slate-200 font-bold rounded-2xl active:scale-95 transition-all shadow-xl">
+                <span class="relative z-10 flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-lock-open text-teal-400"></i> Mantén para Desbloquear
+                </span>
+                <div id="unlockProgress" class="absolute left-0 top-0 bottom-0 bg-teal-500/40 w-0 transition-all duration-75"></div>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Web Audio Synth for Water Splash & Bubbles
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSplashSound() {
+            if (!audioCtx) return;
+            try {
+                // Noise buffer for water impact
+                const bufferSize = audioCtx.sampleRate * 0.18;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+
+                const noise = audioCtx.createBufferSource();
+                noise.buffer = buffer;
+
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(400 + Math.random() * 600, audioCtx.currentTime);
+                filter.frequency.exponentialRampToValueAtTime(1500, audioCtx.currentTime + 0.1);
+
+                const gain = audioCtx.createGain();
+                gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.18);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                noise.start();
+
+                // High pitch droplet pop
+                const osc = audioCtx.createOscillator();
+                const dropGain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600 + Math.random() * 800, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1600, audioCtx.currentTime + 0.08);
+
+                dropGain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                dropGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+
+                osc.connect(dropGain);
+                dropGain.connect(audioCtx.destination);
+
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.08);
+            } catch(e) {}
+        }
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let width, height;
+        let score = 0;
+
+        // Pond Color Schemes
+        const pondThemes = [
+            { name: "Estanque Cenote", bg: "#061826", waterGrad: ["#002b49", "#001220"], rippleColor: "rgba(100, 220, 255, 0.4)" },
+            { name: "Lirio Nocturno", bg: "#0d0b1d", waterGrad: ["#171233", "#070512"], rippleColor: "rgba(180, 130, 255, 0.4)" },
+            { name: "Jardín Zen", bg: "#022c22", waterGrad: ["#064e3b", "#022018"], rippleColor: "rgba(110, 231, 183, 0.4)" }
+        ];
+        let currentPondTheme = 0;
+
+        let koiFishList = [];
+        let ripples = [];
+        let splashParticles = [];
+        let waterLilies = [];
+        let maxFish = 4;
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            initLilies();
+        }
+
+        class WaterRipple {
+            constructor(x, y, maxR = 90) {
+                this.x = x;
+                this.y = y;
+                this.radius = 5;
+                this.maxRadius = maxR;
+                this.alpha = 0.8;
+                this.lineWidth = 3;
+            }
+
+            update() {
+                this.radius += 2.5;
+                this.alpha -= 0.018;
+                this.lineWidth *= 0.98;
+            }
+
+            draw() {
+                if (this.alpha <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.strokeStyle = pondThemes[currentPondTheme].rippleColor;
+                ctx.lineWidth = this.lineWidth;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        class SplashParticle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10;
+                this.size = 2 + Math.random() * 5;
+                this.alpha = 0.9;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vx *= 0.93;
+                this.vy *= 0.93;
+                this.alpha -= 0.03;
+            }
+
+            draw() {
+                if (this.alpha <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.fillStyle = "#ffffff";
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class WaterLily {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 35 + Math.random() * 25;
+                this.angle = Math.random() * Math.PI * 2;
+                this.flower = Math.random() < 0.5;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+
+                // Lily Pad Shadow
+                ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+                ctx.beginPath();
+                ctx.arc(4, 4, this.radius, 0.2, Math.PI * 1.8);
+                ctx.lineTo(4, 4);
+                ctx.fill();
+
+                // Leaf Body
+                ctx.fillStyle = "#0d5c3a";
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0.25, Math.PI * 1.85);
+                ctx.lineTo(0, 0);
+                ctx.fill();
+
+                // Leaf Veins
+                ctx.strokeStyle = "#15804d";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Flower (Optional)
+                if (this.flower) {
+                    ctx.fillStyle = "#f472b6";
+                    for (let i = 0; i < 6; i++) {
+                        ctx.beginPath();
+                        ctx.ellipse(0, -12, 6, 14, (i * Math.PI) / 3, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.fillStyle = "#fef08a";
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        function initLilies() {
+            waterLilies = [];
+            const count = Math.floor((width * height) / 180000) + 2;
+            for (let i = 0; i < count; i++) {
+                waterLilies.push(new WaterLily(
+                    80 + Math.random() * (width - 160),
+                    80 + Math.random() * (height - 160)
+                ));
+            }
+        }
+
+        const koiPalette = [
+            { body: "#ff4500", spots: "#ffffff", tail: "#ffaa88" }, // Classic Red/Orange
+            { body: "#f59e0b", spots: "#1e293b", tail: "#fcd34d" }, // Golden Calico
+            { body: "#ffffff", spots: "#ef4444", tail: "#fca5a5" }, // White Ruby
+            { body: "#38bdf8", spots: "#0284c7", tail: "#bae6fd" }  // Sapphire Blue
+        ];
+
+        class KoiFish {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.speed = 1.8 + Math.random() * 1.5;
+                this.angle = Math.atan2(this.vy, this.vx);
+                this.targetAngle = this.angle;
+                this.length = 40 + Math.random() * 20;
+                this.width = this.length * 0.35;
+                this.wiggle = Math.random() * 100;
+                this.colors = koiPalette[Math.floor(Math.random() * koiPalette.length)];
+                this.frightenedTimer = 0;
+            }
+
+            scare(fromX, fromY) {
+                const dx = this.x - fromX;
+                const dy = this.y - fromY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 180) {
+                    this.frightenedTimer = 40;
+                    this.targetAngle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.5;
+                    this.speed = 6.5; // Fast dart burst
+                }
+            }
+
+            update() {
+                this.wiggle += this.frightenedTimer > 0 ? 0.35 : 0.15;
+
+                // Handle Fright / Normal speed transition
+                if (this.frightenedTimer > 0) {
+                    this.frightenedTimer--;
+                } else {
+                    this.speed += (2.0 - this.speed) * 0.05;
+                    if (Math.random() < 0.02) {
+                        this.targetAngle += (Math.random() - 0.5) * 1.5;
+                    }
+                }
+
+                // Smooth turning angle
+                let angleDiff = this.targetAngle - this.angle;
+                angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+                this.angle += angleDiff * 0.08;
+
+                // Position update
+                this.x += Math.cos(this.angle) * this.speed;
+                this.y += Math.sin(this.angle) * this.speed;
+
+                // Screen Boundary Wrap / Bounce
+                const margin = 50;
+                if (this.x < margin) this.targetAngle = 0;
+                if (this.x > width - margin) this.targetAngle = Math.PI;
+                if (this.y < margin) this.targetAngle = Math.PI / 2;
+                if (this.y > height - margin) this.targetAngle = -Math.PI / 2;
+
+                // Leave subtle swimming ripples
+                if (Math.random() < 0.08) {
+                    ripples.push(new WaterRipple(this.x, this.y, 30));
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+
+                const tailWiggle = Math.sin(this.wiggle) * 12;
+
+                // Fish Shadow in deep water
+                ctx.save();
+                ctx.translate(8, 12);
+                ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+                ctx.beginPath();
+                ctx.ellipse(0, 0, this.length * 0.5, this.width * 0.8, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+
+                // Flexible Tail Fin
+                ctx.fillStyle = this.colors.tail;
+                ctx.beginPath();
+                ctx.moveTo(-this.length * 0.4, 0);
+                ctx.quadraticCurveTo(-this.length * 0.7, tailWiggle * 0.8, -this.length * 0.95, tailWiggle);
+                ctx.quadraticCurveTo(-this.length * 0.7, tailWiggle * 0.2, -this.length * 0.4, 0);
+                ctx.fill();
+
+                // Side Fins
+                ctx.fillStyle = this.colors.tail;
+                ctx.beginPath();
+                ctx.ellipse(-this.length * 0.1, -this.width * 0.8, 10, 5, -Math.PI / 4, 0, Math.PI * 2);
+                ctx.ellipse(-this.length * 0.1, this.width * 0.8, 10, 5, Math.PI / 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Main Body
+                ctx.fillStyle = this.colors.body;
+                ctx.beginPath();
+                ctx.ellipse(0, 0, this.length * 0.5, this.width, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Body Spots
+                ctx.fillStyle = this.colors.spots;
+                ctx.beginPath();
+                ctx.arc(-this.length * 0.1, -2, this.width * 0.4, 0, Math.PI * 2);
+                ctx.arc(this.length * 0.15, 3, this.width * 0.3, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Eyes
+                ctx.fillStyle = "#ffffff";
+                ctx.beginPath();
+                ctx.arc(this.length * 0.35, -this.width * 0.5, 3, 0, Math.PI * 2);
+                ctx.arc(this.length * 0.35, this.width * 0.5, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "#000000";
+                ctx.beginPath();
+                ctx.arc(this.length * 0.36, -this.width * 0.5, 1.5, 0, Math.PI * 2);
+                ctx.arc(this.length * 0.36, this.width * 0.5, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        class Dragonfly {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.targetX = Math.random() * width;
+                this.targetY = Math.random() * height;
+                this.wings = 0;
+            }
+
+            update() {
+                this.wings += 0.5;
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < 20 || Math.random() < 0.02) {
+                    this.targetX = 60 + Math.random() * (width - 120);
+                    this.targetY = 60 + Math.random() * (height - 120);
+                } else {
+                    this.x += (dx / dist) * 4;
+                    this.y += (dy / dist) * 4;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Fluttering Wings
+                const wingOffset = Math.sin(this.wings) * 12;
+                ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+                ctx.beginPath();
+                ctx.ellipse(-10, -wingOffset, 14, 4, -0.2, 0, Math.PI * 2);
+                ctx.ellipse(10, -wingOffset, 14, 4, 0.2, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Body
+                ctx.fillStyle = "#10b981";
+                ctx.fillRect(-2, -15, 4, 30);
+
+                // Head
+                ctx.fillStyle = "#059669";
+                ctx.beginPath();
+                ctx.arc(0, -16, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        function initFish() {
+            koiFishList = [];
+            for (let i = 0; i < maxFish; i++) {
+                koiFishList.push(new KoiFish());
+            }
+        }
+
+        function handlePondTouch(x, y) {
+            initAudio();
+            playSplashSound();
+
+            // Create Water Splash and Ripples
+            ripples.push(new WaterRipple(x, y, 110));
+            for (let i = 0; i < 16; i++) {
+                splashParticles.push(new SplashParticle(x, y));
+            }
+
+            // Scare nearby fish away
+            koiFishList.forEach(fish => fish.scare(x, y));
+
+            // Check if paw hit a fish directly
+            koiFishList.forEach(fish => {
+                const dx = x - fish.x;
+                const dy = y - fish.y;
+                if (Math.sqrt(dx * dx + dy * dy) < 50) {
+                    score++;
+                    updateScoreDisplay();
+
+                    // Respawn fish on catch
+                    fish.reset();
+                }
+            });
+        }
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            for (let i = 0; i < e.touches.length; i++) {
+                handlePondTouch(e.touches[i].clientX - rect.left, e.touches[i].clientY - rect.top);
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            handlePondTouch(e.clientX - rect.left, e.clientY - rect.top);
+        });
+
+        function updateScoreDisplay() {
+            const display = document.getElementById('scoreDisplay');
+            display.innerText = score;
+            display.classList.remove('animate-score');
+            void display.offsetWidth;
+            display.classList.add('animate-score');
+        }
+
+        function render() {
+            const theme = pondThemes[currentPondTheme];
+
+            // Deep Water Gradient Background
+            const grad = ctx.createLinearGradient(0, 0, 0, height);
+            grad.addColorStop(0, theme.waterGrad[0]);
+            grad.addColorStop(1, theme.waterGrad[1]);
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, width, height);
+
+            // Water Lilies Layer (Below Fish / Water Surface)
+            waterLilies.forEach(lily => lily.draw());
+
+            // Render & Update Ripples
+            for (let i = ripples.length - 1; i >= 0; i--) {
+                ripples[i].update();
+                ripples[i].draw();
+                if (ripples[i].alpha <= 0) ripples.splice(i, 1);
+            }
+
+            // Render & Update Koi Fish
+            koiFishList.forEach(fish => {
+                fish.update();
+                fish.draw();
+            });
+
+            // Render & Update Splash Particles (Above Water)
+            for (let i = splashParticles.length - 1; i >= 0; i--) {
+                splashParticles[i].update();
+                splashParticles[i].draw();
+                if (splashParticles[i].alpha <= 0) splashParticles.splice(i, 1);
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        document.getElementById('fishCountBtn').addEventListener('click', () => {
+            if (maxFish === 2) maxFish = 4;
+            else if (maxFish === 4) maxFish = 7;
+            else maxFish = 2;
+
+            document.getElementById('fishCountText').innerText = `${maxFish} Peces`;
+            initFish();
+        });
+
+        document.getElementById('pondThemeBtn').addEventListener('click', () => {
+            currentPondTheme = (currentPondTheme + 1) % pondThemes.length;
+        });
+
+        // Pet Lock
+        const lockBtn = document.getElementById('lockBtn');
+        const unlockBtn = document.getElementById('unlockBtn');
+        const lockOverlay = document.getElementById('lockOverlay');
+        const unlockProgress = document.getElementById('unlockProgress');
+        let unlockTimer = null;
+
+        lockBtn.addEventListener('click', () => lockOverlay.classList.remove('hidden'));
+
+        function startUnlock(e) {
+            e.preventDefault();
+            let start = Date.now();
+            unlockTimer = setInterval(() => {
+                let elapsed = Date.now() - start;
+                let pct = Math.min(100, (elapsed / 1500) * 100);
+                unlockProgress.style.width = `${pct}%`;
+                if (elapsed >= 1500) {
+                    clearInterval(unlockTimer);
+                    lockOverlay.classList.add('hidden');
+                    unlockProgress.style.width = '0%';
+                }
+            }, 50);
+        }
+
+        function cancelUnlock() {
+            if (unlockTimer) clearInterval(unlockTimer);
+            unlockProgress.style.width = '0%';
+        }
+
+        unlockBtn.addEventListener('mousedown', startUnlock);
+        unlockBtn.addEventListener('mouseup', cancelUnlock);
+        unlockBtn.addEventListener('mouseleave', cancelUnlock);
+        unlockBtn.addEventListener('touchstart', startUnlock, { passive: false });
+        unlockBtn.addEventListener('touchend', cancelUnlock);
+
+        window.addEventListener('resize', resize);
+
+        window.onload = () => {
+            resize();
+            initFish();
+            render();
+        };
+    </script>
+</body>
+</html>
